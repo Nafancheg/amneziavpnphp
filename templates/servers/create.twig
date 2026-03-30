@@ -2,17 +2,39 @@
 {% block title %}Add Server{% endblock %}
 {% block content %}
 <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-  <h1 class="text-3xl font-bold mb-8"><i class="fas fa-plus-circle text-purple-600"></i> Add New Server</h1>
+  <h1 class="text-3xl font-bold mb-8"><i class="fas fa-plus-circle text-purple-600"></i> Server Setup</h1>
   {% if error %}<div class="mb-4 bg-red-50 border border-red-400 text-red-700 px-4 py-3 rounded">{{ error }}</div>{% endif %}
   <form method="POST" enctype="multipart/form-data" class="bg-white shadow rounded-lg p-6 space-y-6">
+    <div class="space-y-3">
+      <div class="text-sm font-semibold text-gray-800">Choose action</div>
+      <label class="flex items-start gap-3 p-3 border rounded cursor-pointer hover:bg-gray-50">
+        <input type="radio" name="server_mode" value="deploy" class="mt-1" checked onchange="toggleMode()">
+        <div>
+          <div class="font-medium text-gray-900">Add New Server</div>
+          <div class="text-xs text-gray-500">Create server record and deploy VPN container from panel.</div>
+        </div>
+      </label>
+      <label class="flex items-start gap-3 p-3 border rounded cursor-pointer hover:bg-gray-50">
+        <input type="radio" name="server_mode" value="attach" class="mt-1" onchange="toggleMode()">
+        <div>
+          <div class="font-medium text-gray-900">Add Existing Server (Attach)</div>
+          <div class="text-xs text-gray-500">Do NOT deploy. Read existing VPN config from server and attach it to panel monitoring.</div>
+        </div>
+      </label>
+    </div>
+
     <div><label class="block text-sm font-medium text-gray-700">Server Name</label><input name="name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="US Server 1"></div>
     <div><label class="block text-sm font-medium text-gray-700">Host IP/Domain</label><input name="host" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="123.456.789.0"></div>
     <div><label class="block text-sm font-medium text-gray-700">SSH Port</label><input name="port" type="number" value="22" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
     <div><label class="block text-sm font-medium text-gray-700">SSH Username</label><input name="username" value="root" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
     <div><label class="block text-sm font-medium text-gray-700">SSH Password</label><input name="password" type="password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></div>
     
-    <!-- Import from existing panel -->
-    <div class="border-t pt-6">
+    <div id="attachHint" class="hidden p-3 rounded border border-blue-200 bg-blue-50 text-blue-900 text-sm">
+      Attach mode will only bind an already configured VPN server to this panel. It will not reinstall Docker or redeploy container.
+    </div>
+
+    <!-- Import from existing panel (deploy mode only) -->
+    <div id="deployOptions" class="border-t pt-6">
       <div class="flex items-center mb-4">
         <input type="checkbox" id="enableImport" name="enable_import" class="h-4 w-4 text-purple-600 rounded" onchange="toggleImportFields()">
         <label for="enableImport" class="ml-2 text-sm font-medium text-gray-700">
@@ -40,18 +62,47 @@
       </div>
     </div>
     
-    <button type="submit" class="w-full gradient-bg text-white py-2 px-4 rounded-md hover:opacity-90">
-      <i class="fas fa-save mr-2"></i>Create Server
+    <button type="submit" class="w-full gradient-bg text-white py-2 px-4 rounded-md hover:opacity-90" id="submitButton">
+      <i class="fas fa-save mr-2"></i><span id="submitButtonText">Create and Deploy</span>
     </button>
   </form>
 </div>
 
 <script>
+function getMode() {
+  const selected = document.querySelector('input[name="server_mode"]:checked');
+  return selected ? selected.value : 'deploy';
+}
+
+function toggleMode() {
+  const mode = getMode();
+  const deployOptions = document.getElementById('deployOptions');
+  const attachHint = document.getElementById('attachHint');
+  const submitButtonText = document.getElementById('submitButtonText');
+
+  if (mode === 'attach') {
+    deployOptions.style.display = 'none';
+    attachHint.classList.remove('hidden');
+    submitButtonText.textContent = 'Attach Existing Server';
+  } else {
+    deployOptions.style.display = 'block';
+    attachHint.classList.add('hidden');
+    submitButtonText.textContent = 'Create and Deploy';
+  }
+
+  toggleImportFields();
+}
+
 function toggleImportFields() {
+  const mode = getMode();
   const checkbox = document.getElementById('enableImport');
   const fields = document.getElementById('importFields');
-  fields.style.display = checkbox.checked ? 'block' : 'none';
+  fields.style.display = (mode === 'deploy' && checkbox.checked) ? 'block' : 'none';
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+  toggleMode();
+});
 </script>
 
 {% endblock %}

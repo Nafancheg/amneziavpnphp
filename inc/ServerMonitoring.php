@@ -181,12 +181,22 @@ class ServerMonitoring
         $containerName = $this->serverData['container_name'];
         $publicKey = $client['public_key'];
         
-        $cmd = "docker exec {$containerName} wg show all dump | grep '{$publicKey}' | awk '{print \$6, \$7}'";
+        $safeContainer = escapeshellarg($containerName);
+        $safeKey = escapeshellarg($publicKey);
+        // wg show all dump: cols = interface, pubkey, psk, endpoint, allowed-ips, handshake, rx, tx, keepalive
+        $cmd = "docker exec {$safeContainer} wg show all dump | grep {$safeKey} | awk '{print \$6, \$7, \$8}'";
         $result = $this->execSSH($cmd);
         
         if (!$result) return null;
         
-        list($bytesReceived, $bytesSent) = explode(' ', trim($result));
+        $parts = preg_split('/\s+/', trim($result));
+        if (count($parts) < 3) {
+            return null;
+        }
+
+        $latestHandshakeEpoch = (int)$parts[0]; // handshake epoch
+        $bytesSent = (int)$parts[1];            // server rx = client sent
+        $bytesReceived = (int)$parts[2];         // server tx = client received
         
         // Get previous metrics (30 seconds ago)
         $stmt = $db->prepare("
@@ -206,8 +216,8 @@ class ServerMonitoring
             $timeDiff = time() - strtotime($previous['collected_at']);
             if ($timeDiff > 0) {
                 // Calculate speed in Kbps
-                $bytesDiffSent = (int)$bytesSent - (int)$previous['bytes_sent'];
-                $bytesDiffReceived = (int)$bytesReceived - (int)$previous['bytes_received'];
+                $bytesDiffSent = $bytesSent - (int)$previous['bytes_sent'];
+                $bytesDiffReceived = $bytesReceived - (int)$previous['bytes_received'];
                 
                 $speedUp = round(($bytesDiffSent * 8) / $timeDiff / 1000, 2);
                 $speedDown = round(($bytesDiffReceived * 8) / $timeDiff / 1000, 2);
@@ -215,10 +225,11 @@ class ServerMonitoring
         }
         
         return [
-            'bytes_sent' => (int)$bytesSent,
-            'bytes_received' => (int)$bytesReceived,
+            'bytes_sent' => $bytesSent,
+            'bytes_received' => $bytesReceived,
             'speed_up_kbps' => $speedUp,
             'speed_down_kbps' => $speedDown,
+            'last_handshake_epoch' => $latestHandshakeEpoch,
         ];
     }
     
@@ -267,15 +278,7 @@ class ServerMonitoring
             $stats['speed_up_kbps'],
             $stats['speed_down_kbps'],
         ]);
-        
-        // Update last_handshake in vpn_clients table
-        $stmt = $db->prepare("
-            UPDATE vpn_clients 
-            SET last_handshake = NOW() 
-            WHERE id = ?
-        ");
-        
-        $stmt->execute([$clientId]);
+        // Note: vpn_clients.last_handshake is written ONLY by syncStats/syncAllStatsForServer (Contract 1)
     }
     
     /**
@@ -343,7 +346,7 @@ class ServerMonitoring
         $password = $this->serverData['password'];
         
         $sshCmd = sprintf(
-            'sshpass -p %s ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p %d %s@%s %s 2>/dev/null',
+            'sshpass -p %s ssh -o StrictHostKeyChecking=accept-new -p %d %s@%s %s 2>/dev/null',
             escapeshellarg($password),
             $port,
             escapeshellarg($username),

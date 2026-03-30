@@ -45,6 +45,10 @@ try {
 // Initialize translator
 Translator::init();
 
+// Set timezone
+$appTimezone = Config::get('APP_TIMEZONE', 'UTC');
+date_default_timezone_set($appTimezone);
+
 // Initialize template engine
 $user = Auth::user();
 $appName = Config::get('APP_NAME', 'Amnezia VPN Panel');
@@ -72,8 +76,272 @@ function authenticateRequest(): ?array {
     return null;
 }
 
+function detectServerProtocol(array $serverData): string {
+    $containerName = strtolower((string)($serverData['container_name'] ?? ''));
+    $awgParams = $serverData['awg_params'] ?? null;
+    $hasAwgParams = false;
+    $isAwgV2 = false;
+
+    if (is_string($awgParams) && $awgParams !== '') {
+        $decoded = json_decode($awgParams, true);
+        $hasAwgParams = json_last_error() === JSON_ERROR_NONE && is_array($decoded) && !empty($decoded);
+        if ($hasAwgParams) {
+            $version = strtolower(trim((string)($decoded['protocol_version'] ?? $decoded['protocolVersion'] ?? '')));
+            $isAwgV2 = ($version === '2' || $version === 'v2' || $version === 'awg2');
+        }
+    } elseif (is_array($awgParams) && !empty($awgParams)) {
+        $hasAwgParams = true;
+        $version = strtolower(trim((string)($awgParams['protocol_version'] ?? $awgParams['protocolVersion'] ?? '')));
+        $isAwgV2 = ($version === '2' || $version === 'v2' || $version === 'awg2');
+    }
+
+    if (str_contains($containerName, 'awg2') || $isAwgV2) {
+        return 'awg2';
+    }
+
+    if (str_contains($containerName, 'xray')) {
+        return 'xray';
+    }
+    if (str_contains($containerName, 'openvpn') || str_contains($containerName, 'ovpn')) {
+        return 'openvpn';
+    }
+    if (str_contains($containerName, 'ikev2') || str_contains($containerName, 'ipsec')) {
+        return 'ikev2';
+    }
+    if (str_contains($containerName, 'awg') || $hasAwgParams) {
+        return 'awg';
+    }
+
+    return 'wg';
+}
+
+function normalizeProtocolCode(?string $raw, string $fallback = 'awg'): string {
+    $value = strtolower(trim((string)$raw));
+    if ($value === '') {
+        return $fallback;
+    }
+    if (str_contains($value, 'awg2')) {
+        return 'awg2';
+    }
+    if (str_contains($value, 'amneziawg') || preg_match('/\bawg\b/', $value)) {
+        return 'awg';
+    }
+    if (str_contains($value, 'wireguard') || preg_match('/\bwg\b/', $value)) {
+        return 'wg';
+    }
+    if (
+        str_contains($value, 'xray')
+        || in_array($value, ['vless', 'vmess', 'trojan', 'shadowsocks', 'reality'], true)
+    ) {
+        return 'xray';
+    }
+    if (str_contains($value, 'openvpn') || $value === 'ovpn') {
+        return 'openvpn';
+    }
+    if (str_contains($value, 'ikev2') || str_contains($value, 'ipsec')) {
+        return 'ikev2';
+    }
+
+    return $fallback;
+}
+
+function formatProtocolLabel(string $code): string {
+    return match ($code) {
+        'awg2' => 'AWG2',
+        'awg' => 'AmneziaWG (legacy)',
+        'wg' => 'WireGuard',
+        'xray' => 'Xray',
+        'openvpn' => 'OpenVPN',
+        'ikev2' => 'IKEv2',
+        default => strtoupper($code),
+    };
+}
+
+function protocolBadgeClass(string $code): string {
+    return match ($code) {
+        'awg2' => 'bg-purple-100 text-purple-800',
+        'awg' => 'bg-gray-100 text-gray-600',
+        'xray' => 'bg-orange-100 text-orange-800',
+        'openvpn' => 'bg-emerald-100 text-emerald-800',
+        'ikev2' => 'bg-indigo-100 text-indigo-800',
+        default => 'bg-blue-100 text-blue-800',
+    };
+}
+
+function inferClientProtocolCode(array $clientData, string $fallback): string {
+    $candidates = [
+        $clientData['peer_protocol'] ?? null,
+        $clientData['protocol'] ?? null,
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (is_string($candidate) && trim($candidate) !== '') {
+            return normalizeProtocolCode($candidate, $fallback);
+        }
+    }
+
+    $rawConfig = $clientData['config'] ?? null;
+    if (is_string($rawConfig) && trim($rawConfig) !== '') {
+        $decoded = json_decode($rawConfig, true);
+        if (is_array($decoded)) {
+            $configCandidates = [
+                $decoded['protocol'] ?? null,
+                $decoded['vpnproto'] ?? null,
+                $decoded['protocol_version'] ?? null,
+                $decoded['profileType'] ?? null,
+                $decoded['clientType'] ?? null,
+                $decoded['mode'] ?? null,
+                $decoded['container'] ?? null,
+            ];
+
+            foreach ($configCandidates as $candidate) {
+                if (is_string($candidate) && trim($candidate) !== '') {
+                    return normalizeProtocolCode($candidate, $fallback);
+                }
+            }
+        }
+
+        if (preg_match('/"protocol"\s*:\s*"([^"]+)"/i', $rawConfig, $m)) {
+            return normalizeProtocolCode($m[1], $fallback);
+        }
+    }
+
+    $containerCandidate = $clientData['container'] ?? null;
+    if (is_string($containerCandidate) && trim($containerCandidate) !== '') {
+        return normalizeProtocolCode($containerCandidate, $fallback);
+    }
+
+    return $fallback;
+}
+
+function csrfToken(): string {
+    $existing = $_SESSION['csrf_token'] ?? null;
+    if (is_string($existing) && $existing !== '') {
+        return $existing;
+    }
+
+    $token = bin2hex(random_bytes(32));
+    $_SESSION['csrf_token'] = $token;
+    return $token;
+}
+
+function isValidCsrfToken(?string $token): bool {
+    $sessionToken = $_SESSION['csrf_token'] ?? null;
+    if (!is_string($sessionToken) || $sessionToken === '' || !is_string($token) || $token === '') {
+        return false;
+    }
+
+    return hash_equals($sessionToken, $token);
+}
+
+function safeInternalRedirectTarget(?string $target, string $fallback = '/servers'): string {
+    if (!is_string($target) || trim($target) === '') {
+        return $fallback;
+    }
+
+    $parsed = parse_url($target);
+    if ($parsed === false) {
+        return $fallback;
+    }
+
+    if (isset($parsed['host']) && $parsed['host'] !== '') {
+        $requestHost = strtolower((string)($_SERVER['HTTP_HOST'] ?? ''));
+        if ($requestHost === '' || strtolower((string)$parsed['host']) !== $requestHost) {
+            return $fallback;
+        }
+    }
+
+    $path = (string)($parsed['path'] ?? '');
+    if ($path === '' || $path[0] !== '/' || substr($path, 0, 2) === '//') {
+        return $fallback;
+    }
+
+    $query = isset($parsed['query']) && $parsed['query'] !== ''
+        ? '?' . $parsed['query']
+        : '';
+
+    return $path . $query;
+}
+
+function resolvePhpCliBinary(): string {
+    $isCommandAvailable = static function (string $command): bool {
+        if ($command === '' || preg_match('/\s/', $command)) {
+            return false;
+        }
+
+        $probe = 'command -v ' . escapeshellarg($command) . ' >/dev/null 2>&1; echo $?';
+        return trim((string)shell_exec($probe)) === '0';
+    };
+
+    $candidates = [
+        trim((string)Config::get('PHP_CLI_BIN', '')),
+        defined('PHP_BINARY') ? trim((string)PHP_BINARY) : '',
+        '/usr/local/bin/php',
+        '/usr/bin/php',
+        'php',
+    ];
+
+    foreach ($candidates as $candidate) {
+        if ($candidate === '') {
+            continue;
+        }
+
+        // Bare command name relies on PATH resolution.
+        if (!str_contains($candidate, '/')) {
+            if ($isCommandAvailable($candidate)) {
+                return $candidate;
+            }
+            continue;
+        }
+
+        if (is_file($candidate) && is_executable($candidate)) {
+            return $candidate;
+        }
+    }
+
+    return 'php';
+}
+
+function runPhpScript(string $scriptPath, array $args = []): string {
+    if (!is_file($scriptPath)) {
+        throw new RuntimeException('Script not found: ' . $scriptPath);
+    }
+
+    $parts = [
+        escapeshellarg(resolvePhpCliBinary()),
+        escapeshellarg($scriptPath),
+    ];
+
+    foreach ($args as $arg) {
+        $parts[] = escapeshellarg((string)$arg);
+    }
+
+    $command = implode(' ', $parts) . ' 2>&1';
+    return trim((string)shell_exec($command));
+}
+
+function requireValidCsrfToken(): void {
+    $token = $_POST['_csrf'] ?? null;
+    if (!isValidCsrfToken(is_string($token) ? $token : null)) {
+        $accept = strtolower((string)($_SERVER['HTTP_ACCEPT'] ?? ''));
+        if (str_contains($accept, 'application/json')) {
+            http_response_code(419);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Invalid CSRF token']);
+            exit;
+        }
+
+        $_SESSION['error_message'] = 'Session expired. Please retry the action.';
+        $referer = $_SERVER['HTTP_REFERER'] ?? '/servers';
+        redirect(safeInternalRedirectTarget($referer, '/servers'));
+        exit;
+    }
+}
+
 View::init(__DIR__ . '/../templates', [
     'app_name' => $appName,
+    'app_timezone' => $appTimezone,
+    'csrf_token' => csrfToken(),
     'user' => $user,
     'current_language' => Translator::getCurrentLanguage(),
     'languages' => Translator::getSupportedLanguages(),
@@ -256,6 +524,7 @@ Router::post('/servers/create', function () {
     requireAuth();
     $user = Auth::user();
     
+    $serverMode = trim($_POST['server_mode'] ?? 'deploy');
     $name = trim($_POST['name'] ?? '');
     $host = trim($_POST['host'] ?? '');
     $port = (int)($_POST['port'] ?? 22);
@@ -276,6 +545,26 @@ Router::post('/servers/create', function () {
             'username' => $username,
             'password' => $password,
         ]);
+
+        if ($serverMode === 'attach') {
+            $attachScript = __DIR__ . '/../bin/attach_existing_server.php';
+            $attachOutput = runPhpScript($attachScript, [(string)((int)$serverId)]);
+
+            if (strpos($attachOutput, 'ATTACH_OK') !== false) {
+                $_SESSION['success_message'] = 'Server attached successfully. Existing VPN configuration is now monitored by panel.';
+                redirect('/servers/' . $serverId);
+                return;
+            }
+
+            $errorText = $attachOutput !== '' ? substr($attachOutput, 0, 1000) : 'Unknown attach error';
+            DB::conn()->prepare('UPDATE vpn_servers SET status = ?, error_message = ? WHERE id = ?')
+                ->execute(['error', 'Attach failed: ' . $errorText, $serverId]);
+
+            View::render('servers/create.twig', [
+                'error' => 'Failed to attach existing server: ' . $errorText,
+            ]);
+            return;
+        }
         
         // Handle import if enabled
         if (!empty($_POST['enable_import']) && !empty($_POST['panel_type']) && isset($_FILES['backup_file'])) {
@@ -298,9 +587,182 @@ Router::post('/servers/create', function () {
     }
 });
 
+// Switch active container — instant from cached config, no SSH
+Router::post('/servers/{id}/switch-container', function ($params) {
+    requireAuth();
+    requireValidCsrfToken();
+    $user = Auth::user();
+    $serverId = (int)$params['id'];
+
+    try {
+        $server = new VpnServer($serverId);
+        $serverData = $server->getData();
+
+        if ($serverData['user_id'] != $user['id'] && !Auth::isAdmin()) {
+            http_response_code(403);
+            echo 'Forbidden';
+            return;
+        }
+
+        $requestedContainer = trim($_POST['container'] ?? '');
+        if ($requestedContainer === '' || !preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/', $requestedContainer)) {
+            $_SESSION['error_message'] = 'Invalid container name.';
+            redirect('/servers/' . $serverId);
+            return;
+        }
+
+        if ($requestedContainer === ($serverData['container_name'] ?? '')) {
+            redirect('/servers/' . $serverId);
+            return;
+        }
+
+        // Read cached container configs from awg_params
+        $awgParams = [];
+        if (!empty($serverData['awg_params'])) {
+            $awgParams = is_array($serverData['awg_params'])
+                ? $serverData['awg_params']
+                : (json_decode($serverData['awg_params'], true) ?: []);
+        }
+
+        $cachedContainers = $awgParams['containers'] ?? [];
+        $targetConfig = $cachedContainers[$requestedContainer] ?? null;
+
+        if ($targetConfig === null) {
+            $_SESSION['error_message'] = 'Container "' . htmlspecialchars($requestedContainer) . '" config not cached. Run re-attach first.';
+            redirect('/servers/' . $serverId);
+            return;
+        }
+
+        // Update top-level awg_params with target container's params
+        $newAwg = [];
+        foreach ($targetConfig as $k => $v) {
+            if (!in_array($k, ['server_public_key', 'preshared_key', 'listen_port'], true) && !is_array($v)) {
+                $newAwg[$k] = $v;
+            }
+        }
+        // Preserve cached containers and metadata
+        $newAwg['containers'] = $cachedContainers;
+        if (isset($awgParams['installed_protocols'])) {
+            $newAwg['installed_protocols'] = $awgParams['installed_protocols'];
+        }
+        if (isset($awgParams['installed_containers'])) {
+            $newAwg['installed_containers'] = $awgParams['installed_containers'];
+        }
+
+        $vpnPort = $targetConfig['vpn_port'] ?? $serverData['vpn_port'];
+        $vpnSubnet = $targetConfig['vpn_subnet'] ?? $serverData['vpn_subnet'];
+        $publicKey = $targetConfig['server_public_key'] ?? $serverData['server_public_key'];
+        $presharedKey = $targetConfig['preshared_key'] ?? $serverData['preshared_key'];
+
+        $pdo = DB::conn();
+        $pdo->prepare('UPDATE vpn_servers SET container_name = ?, vpn_port = ?, vpn_subnet = ?, server_public_key = ?, preshared_key = ?, awg_params = ? WHERE id = ?')
+            ->execute([
+                $requestedContainer,
+                $vpnPort,
+                $vpnSubnet,
+                $publicKey ?: null,
+                $presharedKey ?: null,
+                json_encode($newAwg, JSON_UNESCAPED_UNICODE),
+                $serverId,
+            ]);
+
+        $_SESSION['success_message'] = 'Switched to ' . htmlspecialchars($requestedContainer) . ' (instant, from cache).';
+        redirect('/servers/' . $serverId);
+    } catch (Exception $e) {
+        $_SESSION['error_message'] = 'Switch failed: ' . $e->getMessage();
+        redirect('/servers/' . $serverId);
+    }
+});
+
+// Re-attach: re-read server config and update parameters
+Router::post('/servers/{id}/reattach', function ($params) {
+    requireAuth();
+    requireValidCsrfToken();
+    $user = Auth::user();
+    $serverId = (int)$params['id'];
+
+    try {
+        $server = new VpnServer($serverId);
+        $serverData = $server->getData();
+
+        if ($serverData['user_id'] != $user['id'] && !Auth::isAdmin()) {
+            http_response_code(403);
+            echo 'Forbidden';
+            return;
+        }
+
+        // If user selected a different container, update it before re-attach
+        $requestedContainer = trim($_POST['container'] ?? '');
+        if ($requestedContainer !== '' && preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/', $requestedContainer)) {
+            if ($requestedContainer !== ($serverData['container_name'] ?? '')) {
+                $pdo = DB::conn();
+                $pdo->prepare('UPDATE vpn_servers SET container_name = ? WHERE id = ?')
+                    ->execute([$requestedContainer, $serverId]);
+            }
+        }
+
+        $attachScript = __DIR__ . '/../bin/attach_existing_server.php';
+        $attachOutput = runPhpScript($attachScript, [(string)$serverId]);
+
+        if (strpos($attachOutput, 'ATTACH_OK') !== false) {
+            $_SESSION['success_message'] = 'Server re-attached successfully. Configuration re-read from remote server.';
+            // Show attach output details in session for debugging
+            $_SESSION['reattach_output'] = $attachOutput;
+        } else {
+            $errorText = $attachOutput !== '' ? substr($attachOutput, 0, 1000) : 'Unknown re-attach error';
+            $_SESSION['error_message'] = 'Re-attach failed: ' . $errorText;
+        }
+
+        redirect('/servers/' . $serverId);
+    } catch (Exception $e) {
+        $_SESSION['error_message'] = 'Re-attach failed: ' . $e->getMessage();
+        redirect('/servers/' . $serverId);
+    }
+});
+
+// Detach server from panel monitoring (without deleting remote VPN server)
+Router::post('/servers/{id}/detach', function ($params) {
+    requireAuth();
+    requireValidCsrfToken();
+    $user = Auth::user();
+    $serverId = (int)$params['id'];
+
+    try {
+        $server = new VpnServer($serverId);
+        $serverData = $server->getData();
+
+        // Check ownership or admin
+        if ($serverData['user_id'] != $user['id'] && !Auth::isAdmin()) {
+            http_response_code(403);
+            echo 'Forbidden';
+            return;
+        }
+
+        $detachScript = __DIR__ . '/../bin/detach_server.php';
+        $detachOutput = runPhpScript($detachScript, [(string)$serverId, '--delete-clients']);
+
+        if (strpos($detachOutput, 'DETACH_OK') !== false) {
+            $deletedClients = 0;
+            if (preg_match('/deleted_clients=(\d+)/', $detachOutput, $m)) {
+                $deletedClients = (int)$m[1];
+            }
+            $_SESSION['success_message'] = 'Server detached from panel monitoring. Remote VPN server was NOT deleted. Local panel clients removed: ' . $deletedClients . '.';
+        } else {
+            $errorText = $detachOutput !== '' ? substr($detachOutput, 0, 1000) : 'Unknown detach error';
+            $_SESSION['error_message'] = 'Failed to detach server: ' . $errorText;
+        }
+
+        redirect('/servers');
+    } catch (Exception $e) {
+        $_SESSION['error_message'] = 'Detach failed: ' . $e->getMessage();
+        redirect('/servers');
+    }
+});
+
 // Delete server action
 Router::post('/servers/{id}/delete', function ($params) {
     requireAuth();
+    requireValidCsrfToken();
     $user = Auth::user();
     $serverId = (int)$params['id'];
     
@@ -383,6 +845,9 @@ Router::get('/servers/{id}', function ($params) {
     try {
         $server = new VpnServer($serverId);
         $serverData = $server->getData();
+        $serverProtocolCode = detectServerProtocol($serverData);
+        $serverProtocolLabel = formatProtocolLabel($serverProtocolCode);
+        $serverProtocolBadgeClass = protocolBadgeClass($serverProtocolCode);
         
         // Check ownership
         $user = Auth::user();
@@ -392,8 +857,32 @@ Router::get('/servers/{id}', function ($params) {
             return;
         }
         
+        $displayTimezone = new DateTimeZone(Config::get('APP_TIMEZONE', 'UTC'));
+        $normalizeClientHandshakeTime = function (array $rows) use ($displayTimezone, $serverProtocolCode): array {
+            foreach ($rows as &$client) {
+                $client['last_handshake_local'] = null;
+                $clientProtocolCode = inferClientProtocolCode($client, $serverProtocolCode);
+                $client['peer_protocol_code'] = $clientProtocolCode;
+                $client['peer_protocol_label'] = formatProtocolLabel($clientProtocolCode);
+                $client['peer_protocol_badge_class'] = protocolBadgeClass($clientProtocolCode);
+
+                if (empty($client['last_handshake']) || $client['last_handshake'] === '0000-00-00 00:00:00') {
+                    continue;
+                }
+
+                try {
+                    $utc = new DateTimeImmutable($client['last_handshake'], new DateTimeZone('UTC'));
+                    $client['last_handshake_local'] = $utc->setTimezone($displayTimezone)->format('Y-m-d H:i:s');
+                } catch (Exception $e) {
+                    $client['last_handshake_local'] = null;
+                }
+            }
+
+            return $rows;
+        };
+
         // Get clients for this server
-        $clients = VpnClient::listByServer($serverId);
+        $clients = $normalizeClientHandshakeTime(VpnClient::listByServer($serverId));
         
         // Check for pending import
         $importMessage = null;
@@ -429,14 +918,39 @@ Router::get('/servers/{id}', function ($params) {
                 }
                 
                 // Refresh clients list after import
-                $clients = VpnClient::listByServer($serverId);
+                $clients = $normalizeClientHandshakeTime(VpnClient::listByServer($serverId));
             }
         }
         
+        $reattachOutput = null;
+        if (!empty($_SESSION['reattach_output'])) {
+            $reattachOutput = $_SESSION['reattach_output'];
+            unset($_SESSION['reattach_output']);
+        }
+
+        // Decode awg_params for template display
+        $awgParamsDecoded = [];
+        if (!empty($serverData['awg_params'])) {
+            $awgParamsDecoded = is_array($serverData['awg_params'])
+                ? $serverData['awg_params']
+                : (json_decode($serverData['awg_params'], true) ?: []);
+        }
+
+        // CONTRACT-2: Show only clients for the active container
+        $activeContainer = $serverData['container_name'] ?? '';
+        $clients = array_values(array_filter($clients, function ($c) use ($activeContainer) {
+            return ($c['peer_protocol'] ?? '') === $activeContainer;
+        }));
+
         View::render('servers/view.twig', [
             'server' => $serverData,
+            'server_protocol_code' => $serverProtocolCode,
+            'server_protocol_label' => $serverProtocolLabel,
+            'server_protocol_badge_class' => $serverProtocolBadgeClass,
             'clients' => $clients,
             'import_message' => $importMessage,
+            'reattach_output' => $reattachOutput,
+            'awg_params' => $awgParamsDecoded,
         ]);
     } catch (Exception $e) {
         error_log('Server view error: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
@@ -472,30 +986,6 @@ Router::get('/servers/{id}/monitoring', function ($params) {
     } catch (Exception $e) {
         http_response_code(404);
         echo 'Server not found';
-    }
-});
-
-// Delete server
-Router::post('/servers/{id}/delete', function ($params) {
-    requireAuth();
-    $serverId = (int)$params['id'];
-    
-    try {
-        $server = new VpnServer($serverId);
-        $serverData = $server->getData();
-        
-        // Check ownership
-        $user = Auth::user();
-        if ($serverData['user_id'] != $user['id'] && !Auth::isAdmin()) {
-            http_response_code(403);
-            echo 'Forbidden';
-            return;
-        }
-        
-        $server->delete();
-        redirect('/servers');
-    } catch (Exception $e) {
-        redirect('/servers');
     }
 });
 
@@ -563,6 +1053,12 @@ Router::get('/clients/{id}', function ($params) {
     try {
         $client = new VpnClient($clientId);
         $clientData = $client->getData();
+        $server = new VpnServer((int)$clientData['server_id']);
+        $serverData = $server->getData();
+        $defaultProtocolCode = detectServerProtocol($serverData);
+        $peerProtocolCode = inferClientProtocolCode($clientData, $defaultProtocolCode);
+        $peerProtocolLabel = formatProtocolLabel($peerProtocolCode);
+        $peerProtocolBadgeClass = protocolBadgeClass($peerProtocolCode);
         
         // Check ownership
         $user = Auth::user();
@@ -572,7 +1068,12 @@ Router::get('/clients/{id}', function ($params) {
             return;
         }
         
-        View::render('clients/view.twig', ['client' => $clientData]);
+        View::render('clients/view.twig', [
+            'client' => $clientData,
+            'peer_protocol_code' => $peerProtocolCode,
+            'peer_protocol_label' => $peerProtocolLabel,
+            'peer_protocol_badge_class' => $peerProtocolBadgeClass,
+        ]);
     } catch (Exception $e) {
         http_response_code(404);
         echo 'Client not found';
@@ -1240,6 +1741,72 @@ Router::get('/api/clients/{id}/details', function ($params) {
     }
 });
 
+// API: Update client local metadata (name/description in panel DB only)
+Router::post('/api/clients/{id}/metadata', function ($params) {
+    header('Content-Type: application/json');
+
+    $user = getAuthUser();
+    if (!$user) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        return;
+    }
+
+    $clientId = (int)$params['id'];
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw, true) ?: [];
+
+    $name = trim((string)($data['name'] ?? ''));
+    $description = isset($data['description']) ? trim((string)$data['description']) : null;
+
+    if ($name === '') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Name is required']);
+        return;
+    }
+
+    if (mb_strlen($name) > 255) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Name is too long']);
+        return;
+    }
+
+    if ($description !== null && mb_strlen($description) > 2000) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Description is too long']);
+        return;
+    }
+
+    if ($description === '') {
+        $description = null;
+    }
+
+    try {
+        $client = new VpnClient($clientId);
+        $clientData = $client->getData();
+
+        // Check ownership
+        if ($clientData['user_id'] != $user['id'] && $user['role'] !== 'admin') {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            return;
+        }
+
+        $pdo = DB::conn();
+        $stmt = $pdo->prepare('UPDATE vpn_clients SET name = ?, description = ? WHERE id = ?');
+        $stmt->execute([$name, $description, $clientId]);
+
+        echo json_encode([
+            'success' => true,
+            'name' => $name,
+            'description' => $description
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+});
+
 // API: Get client QR code
 Router::get('/api/clients/{id}/qr', function ($params) {
     header('Content-Type: application/json');
@@ -1826,6 +2393,13 @@ Router::post('/settings/ldap/test', function () {
     require_once __DIR__ . '/../inc/LdapSync.php';
     $controller = new SettingsController();
     $controller->testLdapConnection();
+});
+
+Router::post('/settings/system', function () {
+    requireAdmin();
+    require_once __DIR__ . '/../controllers/SettingsController.php';
+    $controller = new SettingsController();
+    $controller->saveSystem();
 });
 
 /**

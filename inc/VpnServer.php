@@ -153,11 +153,11 @@ class VpnServer {
      */
     private function testConnection(): bool {
         $testCommand = sprintf(
-            "sshpass -p '%s' ssh -p %d -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10 %s@%s 'echo test' 2>/dev/null",
-            $this->data['password'],
-            $this->data['port'],
-            $this->data['username'],
-            $this->data['host']
+            "sshpass -p %s ssh -p %d -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10 %s@%s 'echo test' 2>/dev/null",
+            escapeshellarg($this->data['password']),
+            (int)$this->data['port'],
+            escapeshellarg($this->data['username']),
+            escapeshellarg($this->data['host'])
         );
         
         $result = shell_exec($testCommand);
@@ -169,16 +169,16 @@ class VpnServer {
      */
     private function executeCommand(string $command, bool $sudo = false): string {
         if ($sudo && strtolower($this->data['username']) !== 'root') {
-            $command = "echo '{$this->data['password']}' | sudo -S " . $command;
+            $command = "echo " . escapeshellarg($this->data['password']) . " | sudo -S " . $command;
         }
         
         $escapedCommand = escapeshellarg($command);
         $sshCommand = sprintf(
-            "sshpass -p '%s' ssh -p %d -q -o LogLevel=ERROR -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no %s@%s %s 2>&1",
-            $this->data['password'],
-            $this->data['port'],
-            $this->data['username'],
-            $this->data['host'],
+            "sshpass -p %s ssh -p %d -q -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no %s@%s %s 2>&1",
+            escapeshellarg($this->data['password']),
+            (int)$this->data['port'],
+            escapeshellarg($this->data['username']),
+            escapeshellarg($this->data['host']),
             $escapedCommand
         );
         
@@ -296,16 +296,17 @@ BASH;
      */
     private function buildDockerImage(): void {
         $containerName = $this->data['container_name'];
+        $sc = escapeshellarg($containerName);
         
         // Cleanup old container/image
-        $this->executeCommand("docker stop {$containerName} 2>/dev/null || true", true);
-        $this->executeCommand("docker rm -fv {$containerName} 2>/dev/null || true", true);
-        $this->executeCommand("docker rmi {$containerName} 2>/dev/null || true", true);
+        $this->executeCommand("docker stop {$sc} 2>/dev/null || true", true);
+        $this->executeCommand("docker rm -fv {$sc} 2>/dev/null || true", true);
+        $this->executeCommand("docker rmi {$sc} 2>/dev/null || true", true);
         
         // Build new image
         $buildCmd = sprintf(
             'docker build --no-cache --pull -t %s /opt/amnezia/amnezia-awg',
-            $containerName
+            escapeshellarg($containerName)
         );
         $this->executeCommand($buildCmd, true);
     }
@@ -315,13 +316,14 @@ BASH;
      */
     private function runContainer(int $vpnPort): void {
         $containerName = $this->data['container_name'];
+        $safeContainer = escapeshellarg($containerName);
         
         $runCmd = sprintf(
             'docker run -d --log-driver none --restart always --privileged --cap-add=NET_ADMIN --cap-add=SYS_MODULE -p %d:%d/udp -v /lib/modules:/lib/modules --name %s %s',
             $vpnPort,
             $vpnPort,
-            $containerName,
-            $containerName
+            $safeContainer,
+            $safeContainer
         );
         
         $this->executeCommand($runCmd, true);
@@ -333,19 +335,20 @@ BASH;
      */
     private function initializeServerConfig(int $vpnPort): array {
         $containerName = $this->data['container_name'];
+        $sc = escapeshellarg($containerName);
         
         // Create directory
-        $this->executeCommand("docker exec -i {$containerName} mkdir -p /opt/amnezia/awg", true);
+        $this->executeCommand("docker exec -i {$sc} mkdir -p /opt/amnezia/awg", true);
         
         // Generate keys
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'cd /opt/amnezia/awg && umask 077 && wg genkey | tee server_private.key | wg pubkey > wireguard_server_public_key.key'", true);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'cd /opt/amnezia/awg && wg genpsk > wireguard_psk.key'", true);
-        $this->executeCommand("docker exec -i {$containerName} chmod 600 /opt/amnezia/awg/server_private.key /opt/amnezia/awg/wireguard_psk.key /opt/amnezia/awg/wireguard_server_public_key.key", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'cd /opt/amnezia/awg && umask 077 && wg genkey | tee server_private.key | wg pubkey > wireguard_server_public_key.key'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'cd /opt/amnezia/awg && wg genpsk > wireguard_psk.key'", true);
+        $this->executeCommand("docker exec -i {$sc} chmod 600 /opt/amnezia/awg/server_private.key /opt/amnezia/awg/wireguard_psk.key /opt/amnezia/awg/wireguard_server_public_key.key", true);
         
         // Get keys
-        $privKey = trim($this->executeCommand("docker exec -i {$containerName} cat /opt/amnezia/awg/server_private.key", true));
-        $pubKey = trim($this->executeCommand("docker exec -i {$containerName} cat /opt/amnezia/awg/wireguard_server_public_key.key", true));
-        $psk = trim($this->executeCommand("docker exec -i {$containerName} cat /opt/amnezia/awg/wireguard_psk.key", true));
+        $privKey = trim($this->executeCommand("docker exec -i {$sc} cat /opt/amnezia/awg/server_private.key", true));
+        $pubKey = trim($this->executeCommand("docker exec -i {$sc} cat /opt/amnezia/awg/wireguard_server_public_key.key", true));
+        $psk = trim($this->executeCommand("docker exec -i {$sc} cat /opt/amnezia/awg/wireguard_psk.key", true));
         
         // Generate AWG parameters
         $awgParams = [
@@ -371,21 +374,21 @@ BASH;
         $wgConfig .= "\n";
         
         $escaped = addslashes($wgConfig);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'echo \"{$escaped}\" > /opt/amnezia/awg/wg0.conf'", true);
-        $this->executeCommand("docker exec -i {$containerName} chmod 600 /opt/amnezia/awg/wg0.conf", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'echo \"{$escaped}\" > /opt/amnezia/awg/wg0.conf'", true);
+        $this->executeCommand("docker exec -i {$sc} chmod 600 /opt/amnezia/awg/wg0.conf", true);
         
         // Create clientsTable
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'echo \"[]\" > /opt/amnezia/awg/clientsTable'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'echo \"[]\" > /opt/amnezia/awg/clientsTable'", true);
         
         // Start WireGuard
-        $this->executeCommand("docker exec -i {$containerName} wg-quick up /opt/amnezia/awg/wg0.conf 2>&1", true);
+        $this->executeCommand("docker exec -i {$sc} wg-quick up /opt/amnezia/awg/wg0.conf 2>&1", true);
         
         // Apply firewall rules
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'iptables -A INPUT -i wg0 -j ACCEPT 2>/dev/null || true'", true);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'iptables -A FORWARD -i wg0 -j ACCEPT 2>/dev/null || true'", true);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'iptables -A OUTPUT -o wg0 -j ACCEPT 2>/dev/null || true'", true);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'iptables -A FORWARD -i wg0 -o eth0 -s 10.8.1.0/24 -j ACCEPT 2>/dev/null || true'", true);
-        $this->executeCommand("docker exec -i {$containerName} sh -c 'iptables -t nat -A POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE 2>/dev/null || true'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'iptables -A INPUT -i wg0 -j ACCEPT 2>/dev/null || true'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'iptables -A FORWARD -i wg0 -j ACCEPT 2>/dev/null || true'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'iptables -A OUTPUT -o wg0 -j ACCEPT 2>/dev/null || true'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'iptables -A FORWARD -i wg0 -o eth0 -s 10.8.1.0/24 -j ACCEPT 2>/dev/null || true'", true);
+        $this->executeCommand("docker exec -i {$sc} sh -c 'iptables -t nat -A POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE 2>/dev/null || true'", true);
         
         sleep(2);
         
@@ -408,7 +411,7 @@ BASH;
      */
     public static function listByUser(int $userId): array {
         $pdo = DB::conn();
-        $stmt = $pdo->prepare('SELECT * FROM vpn_servers WHERE user_id = ? ORDER BY created_at DESC');
+        $stmt = $pdo->prepare("SELECT * FROM vpn_servers WHERE user_id = ? AND status <> 'detached' ORDER BY created_at DESC");
         $stmt->execute([$userId]);
         return $stmt->fetchAll();
     }
@@ -418,7 +421,7 @@ BASH;
      */
     public static function listAll(): array {
         $pdo = DB::conn();
-        $stmt = $pdo->query('SELECT s.*, u.email as user_email FROM vpn_servers s LEFT JOIN users u ON s.user_id = u.id ORDER BY s.created_at DESC');
+        $stmt = $pdo->query("SELECT s.*, u.email as user_email FROM vpn_servers s LEFT JOIN users u ON s.user_id = u.id WHERE s.status <> 'detached' ORDER BY s.created_at DESC");
         return $stmt->fetchAll();
     }
     
@@ -429,8 +432,9 @@ BASH;
         // Stop and remove container
         try {
             $containerName = $this->data['container_name'];
-            $this->executeCommand("docker stop {$containerName} 2>/dev/null || true", true);
-            $this->executeCommand("docker rm -fv {$containerName} 2>/dev/null || true", true);
+            $sc = escapeshellarg($containerName);
+            $this->executeCommand("docker stop {$sc} 2>/dev/null || true", true);
+            $this->executeCommand("docker rm -fv {$sc} 2>/dev/null || true", true);
             $this->executeCommand("rm -rf /opt/amnezia/amnezia-awg", true);
         } catch (Exception $e) {
             // Ignore errors during cleanup

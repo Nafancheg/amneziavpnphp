@@ -35,18 +35,9 @@
     <h1 class="text-3xl font-bold">{{ t('servers.title') }}</h1>
     <a href="/servers/create" class="gradient-bg text-white px-4 py-2 rounded"><i class="fas fa-plus"></i> {{ t('servers.add') }}</a>
   </div>
-  
-  {% if session.success_message %}
-  <div class="mb-4 bg-green-50 border-l-4 border-green-400 p-4">
-    <p class="text-sm text-green-700"><i class="fas fa-check-circle mr-2"></i>{{ session.success_message }}</p>
+  <div class="mb-4 text-xs text-gray-500">
+    "Detach" removes server from panel monitoring and deletes local panel client records for this server. It does not delete the VPN server/container on VPS.
   </div>
-  {% endif %}
-  
-  {% if session.error_message %}
-  <div class="mb-4 bg-red-50 border-l-4 border-red-400 p-4">
-    <p class="text-sm text-red-700"><i class="fas fa-exclamation-circle mr-2"></i>{{ session.error_message }}</p>
-  </div>
-  {% endif %}
   
   {% if servers|length > 0 %}
   <div class="bg-white rounded shadow overflow-hidden">
@@ -98,8 +89,16 @@
             <a href="/servers/{{ server.id }}" class="text-purple-600 hover:text-purple-900">
               <i class="fas fa-eye mr-1"></i>{{ t('servers.view') }}
             </a>
+            <form method="POST" action="/servers/{{ server.id }}/detach" class="inline"
+              onsubmit="return confirm('Detach server from panel monitoring and remove local panel clients? Remote VPN server will NOT be deleted.');">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="text-amber-700 hover:text-amber-900">
+                <i class="fas fa-link-slash mr-1"></i>Detach
+              </button>
+            </form>
             <form method="POST" action="/servers/{{ server.id }}/delete" class="inline" 
                   onsubmit="return confirm('{{ t('message.confirm') }} Delete server {{ server.name }}?');">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button type="submit" class="text-red-600 hover:text-red-900">
                 <i class="fas fa-trash mr-1"></i>{{ t('servers.delete') }}
               </button>

@@ -3,6 +3,24 @@
 {% block content %}
 <div class="max-w-4xl mx-auto px-4 py-8">
   <h1 class="text-3xl font-bold mb-6">{{ client.name }}</h1>
+
+  <div class="bg-white rounded shadow p-6 mb-6">
+    <h3 class="font-bold mb-4">Client Profile (local panel data)</h3>
+    <form onsubmit="saveClientMetadata(event, {{ client.id }})" class="space-y-3">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Name</label>
+        <input id="clientMetaName" type="text" value="{{ client.name }}" maxlength="255" class="w-full px-3 py-2 border rounded" required>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Description</label>
+        <textarea id="clientMetaDescription" maxlength="2000" rows="3" class="w-full px-3 py-2 border rounded" placeholder="Optional local note (does not change VPN server config)">{{ client.description|default('') }}</textarea>
+      </div>
+      <button type="submit" class="gradient-bg text-white px-4 py-2 rounded">
+        <i class="fas fa-save"></i> Save Local Profile
+      </button>
+    </form>
+    <p class="text-xs text-gray-500 mt-3">Name/description are stored only in panel DB and do not modify peer config on server.</p>
+  </div>
   
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
     <div class="bg-white rounded shadow p-6">
@@ -18,6 +36,7 @@
             {% endif %}
           </dd>
         </div>
+        <div><dt class="text-sm text-gray-600">Protocol</dt><dd><span class="px-2 py-1 {{ peer_protocol_badge_class }} rounded text-xs font-mono">{{ peer_protocol_label }}</span></dd></div>
         <div><dt class="text-sm text-gray-600">{{ t('common.created') }}</dt><dd>{{ client.created_at }}</dd></div>
       </dl>
       <div class="flex gap-2">
@@ -47,10 +66,11 @@
           <i class="fas fa-sync-alt"></i> Refresh
         </button>
       </div>
+      <p class="text-xs text-gray-500 mb-3">Traffic is cumulative from WireGuard counters since the last interface/container restart.</p>
       <dl class="space-y-2" id="stats">
-        <div><dt class="text-sm text-gray-600">{{ t('common.uploaded') }}</dt><dd id="stat-sent">{{ (client.bytes_sent|default(0) / 1048576)|number_format(2) }} MB</dd></div>
-        <div><dt class="text-sm text-gray-600">{{ t('common.downloaded') }}</dt><dd id="stat-received">{{ (client.bytes_received|default(0) / 1048576)|number_format(2) }} MB</dd></div>
-        <div><dt class="text-sm text-gray-600">{{ t('common.total') }}</dt><dd id="stat-total">{{ ((client.bytes_sent|default(0) + client.bytes_received|default(0)) / 1048576)|number_format(2) }} MB</dd></div>
+        <div><dt class="text-sm text-gray-600">{{ t('common.uploaded') }}</dt><dd id="stat-sent">{{ (client.bytes_sent|default(0) / 1073741824)|number_format(2) }} GB</dd></div>
+        <div><dt class="text-sm text-gray-600">{{ t('common.downloaded') }}</dt><dd id="stat-received">{{ (client.bytes_received|default(0) / 1073741824)|number_format(2) }} GB</dd></div>
+        <div><dt class="text-sm text-gray-600">{{ t('common.total') }}</dt><dd id="stat-total">{{ ((client.bytes_sent|default(0) + client.bytes_received|default(0)) / 1073741824)|number_format(2) }} GB</dd></div>
         <div><dt class="text-sm text-gray-600">{{ t('clients.last_handshake') }}</dt>
           <dd id="stat-last-seen">
             {% if client.last_handshake %}
@@ -308,6 +328,43 @@ async function syncStats(clientId) {
         : data.stats.last_seen;
     } else {
       alert('Failed to sync stats: ' + (data.error || 'Unknown error'));
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+
+async function saveClientMetadata(event, clientId) {
+  event.preventDefault();
+
+  const name = document.getElementById('clientMetaName').value.trim();
+  const description = document.getElementById('clientMetaDescription').value.trim();
+
+  if (!name) {
+    alert('Name is required');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/clients/${clientId}/metadata`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name,
+        description
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      alert('Client profile saved');
+      window.location.reload();
+    } else {
+      alert('Error: ' + (data.error || 'Unknown error'));
     }
   } catch (error) {
     alert('Error: ' + error.message);

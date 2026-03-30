@@ -158,9 +158,52 @@ class SettingsController {
     
     private function getAllUsers() {
         $stmt = $this->pdo->query("SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC");
-        return $stmt->fetchAll();
+        $users = $stmt->fetchAll();
+        $targetTz = new DateTimeZone(Config::get('APP_TIMEZONE', 'UTC'));
+
+        foreach ($users as &$user) {
+            if (!empty($user['created_at'])) {
+                $utc = new DateTimeImmutable($user['created_at'], new DateTimeZone('UTC'));
+                $user['created_at_local'] = $utc->setTimezone($targetTz)->format('Y-m-d H:i:s');
+            } else {
+                $user['created_at_local'] = null;
+            }
+        }
+
+        return $users;
     }
-    
+
+    public function saveSystem(): void {
+        $timezone = $_POST['timezone'] ?? '';
+        if (!$timezone || !in_array($timezone, timezone_identifiers_list())) {
+            $_SESSION['settings_error'] = 'Неверный часовой пояс.';
+            header('Location: /settings#system');
+            exit;
+        }
+        if ($this->updateEnvKey('APP_TIMEZONE', $timezone)) {
+            date_default_timezone_set($timezone);
+            $_SESSION['settings_success'] = 'Часовой пояс изменён на ' . $timezone . '. Перезапустите страницу для применения.';
+        } else {
+            $_SESSION['settings_error'] = 'Не удалось обновить .env файл.';
+        }
+        header('Location: /settings#system');
+        exit;
+    }
+
+    private function updateEnvKey(string $key, string $value): bool {
+        $envPath = __DIR__ . '/../.env';
+        $content = file_get_contents($envPath);
+        if ($content === false) return false;
+        $pattern = '/^' . preg_quote($key, '/') . '=.*/m';
+        $replacement = $key . '=' . $value;
+        if (preg_match($pattern, $content)) {
+            $content = preg_replace($pattern, $replacement, $content);
+        } else {
+            $content .= "\n" . $replacement . "\n";
+        }
+        return file_put_contents($envPath, $content) !== false;
+    }
+
     private function getApiKey($service) {
         $stmt = $this->pdo->prepare("SELECT api_key FROM api_keys WHERE service_name = ? AND is_active = 1");
         $stmt->execute([$service]);

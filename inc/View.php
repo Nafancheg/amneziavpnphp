@@ -42,6 +42,14 @@ class View {
 
   public static function render(string $template, array $vars = []): void {
     if (!self::$twig) throw new RuntimeException('Twig is not initialized');
+
+    if (!array_key_exists('session', $vars)) {
+      $vars['session'] = $_SESSION ?? [];
+    }
+
     echo self::$twig->render($template, $vars);
+
+    // Consume one-time flash messages after the response is rendered.
+    unset($_SESSION['success_message'], $_SESSION['error_message']);
   }
 }

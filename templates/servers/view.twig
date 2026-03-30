@@ -55,12 +55,144 @@
   
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
     <div class="bg-white rounded shadow p-6">
-      <h3 class="font-bold mb-4">{{ t('servers.server_info') }}</h3>
-      <dl class="space-y-2">
-        <div><dt class="text-sm text-gray-600">{{ t('common.status') }}</dt><dd><span class="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">{{ server.status }}</span></dd></div>
-        <div><dt class="text-sm text-gray-600">VPN Port</dt><dd>{{ server.vpn_port }}</dd></div>
-        <div><dt class="text-sm text-gray-600">Subnet</dt><dd>{{ server.vpn_subnet }}</dd></div>
-      </dl>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold">{{ t('servers.server_info') }}</h3>
+        <div class="flex items-center gap-2">
+          {% if server.status == 'active' %}
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium"><span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>{{ server.status }}</span>
+          {% elseif server.status == 'error' %}
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 bg-red-100 text-red-800 rounded-full text-xs font-medium"><span class="w-1.5 h-1.5 bg-red-500 rounded-full"></span>{{ server.status }}</span>
+          {% else %}
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-100 text-gray-700 rounded-full text-xs font-medium">{{ server.status }}</span>
+          {% endif %}
+          <span class="px-2.5 py-1 {{ server_protocol_badge_class }} rounded-full text-xs font-mono font-medium">{{ server_protocol_label }}</span>
+        </div>
+      </div>
+
+      {# Compact info grid #}
+      <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm mb-4">
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">Host</span>
+          <span class="font-mono text-gray-900">{{ server.host }}</span>
+        </div>
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">SSH Port</span>
+          <span class="font-mono text-gray-900">{{ server.port }}</span>
+        </div>
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">VPN Port</span>
+          <span class="font-mono text-gray-900">{{ server.vpn_port }}{% if awg_params.transport_proto %}/{{ awg_params.transport_proto }}{% endif %}</span>
+        </div>
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">Subnet</span>
+          <span class="font-mono text-gray-900">{{ server.vpn_subnet }}</span>
+        </div>
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">Container</span>
+          <span class="font-mono text-gray-900">{{ server.container_name }}</span>
+        </div>
+        <div class="flex justify-between py-1.5 border-b border-gray-100">
+          <span class="text-gray-500">Clients</span>
+          <span class="font-mono text-gray-900">{{ clients|length }}</span>
+        </div>
+      </div>
+
+      {# Installed protocols/containers #}
+      {% if awg_params.installed_containers is defined and awg_params.installed_containers|length > 0 %}
+      <div class="mb-3">
+        <div class="text-xs text-gray-500 mb-1.5">Installed on server:</div>
+        <div class="flex flex-wrap gap-1.5">
+          {% for ic in awg_params.installed_containers %}
+            {% set is_active = (ic.name == server.container_name) %}
+            {% if is_active %}
+              <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-mono bg-purple-100 text-purple-800 ring-1 ring-purple-300">
+                <span class="w-1.5 h-1.5 bg-purple-500 rounded-full"></span>
+                {{ ic.name }}{% if ic.port %}:{{ ic.port }}{% endif %}{% if ic.transport %}/{{ ic.transport }}{% endif %}
+              </span>
+            {% else %}
+              <form method="POST" action="/servers/{{ server.id }}/switch-container" class="inline">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <input type="hidden" name="container" value="{{ ic.name }}">
+                <button type="submit" class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-mono bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-700 cursor-pointer transition-colors" title="Click to switch">
+                  {{ ic.name }}{% if ic.port %}:{{ ic.port }}{% endif %}{% if ic.transport %}/{{ ic.transport }}{% endif %}
+                </button>
+              </form>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% elseif awg_params.installed_protocols is defined and awg_params.installed_protocols|length > 0 %}
+      <div class="mb-3">
+        <div class="text-xs text-gray-500 mb-1.5">Installed protocols:</div>
+        <div class="flex flex-wrap gap-1.5">
+          {% for proto in awg_params.installed_protocols %}
+            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-mono bg-gray-100 text-gray-600">{{ proto }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Collapsible: Protocol Parameters (filter out meta keys) #}
+      {% set param_keys = {} %}
+      {% for key, val in awg_params %}
+        {% if key not in ['installed_protocols', 'installed_containers', 'containers', 'transport_proto'] and val is not iterable %}
+          {% set param_keys = param_keys|merge({(key): val}) %}
+        {% endif %}
+      {% endfor %}
+      {% if param_keys|length > 0 %}
+      <details class="mb-3 border border-gray-200 rounded">
+        <summary class="px-3 py-2 text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-50 select-none flex items-center gap-2">
+          <i class="fas fa-sliders-h text-gray-400 text-xs"></i>
+          Protocol Parameters
+          <span class="text-xs text-gray-400 font-normal">({{ param_keys|length }})</span>
+        </summary>
+        <div class="px-3 pb-3">
+          <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs font-mono mt-1">
+            {% for key, val in param_keys %}
+              <div class="flex justify-between py-0.5 {% if not loop.last %}border-b border-gray-50{% endif %}">
+                <span class="text-gray-500">{{ key }}</span>
+                <span class="text-gray-900">{{ val }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </details>
+      {% endif %}
+
+      {# Collapsible: Re-attach output #}
+      {% if reattach_output %}
+      <details class="mb-3 border border-green-200 rounded" open>
+        <summary class="px-3 py-2 text-sm font-medium text-green-800 cursor-pointer hover:bg-green-50 select-none flex items-center gap-2">
+          <i class="fas fa-terminal text-green-400 text-xs"></i>
+          Re-attach Output
+        </summary>
+        <div class="px-3 pb-3">
+          <pre class="text-xs font-mono text-gray-700 bg-gray-50 rounded p-2 whitespace-pre-wrap overflow-x-auto">{{ reattach_output }}</pre>
+        </div>
+      </details>
+      {% endif %}
+
+      {# Actions row #}
+      <div class="flex flex-wrap items-end gap-2 pt-2 border-t border-gray-100">
+        <form method="POST" action="/servers/{{ server.id }}/reattach" onsubmit="return confirm('Re-read VPN configuration from remote server? This will update server parameters and re-import clients.');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+            <i class="fas fa-sync-alt"></i>Re-attach
+          </button>
+        </form>
+        <form method="POST" action="/servers/{{ server.id }}/detach" onsubmit="return confirm('Detach server from panel monitoring and remove local panel clients? Remote VPN server will NOT be deleted.');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors">
+            <i class="fas fa-link-slash"></i>Detach
+          </button>
+        </form>
+        <form method="POST" action="/servers/{{ server.id }}/delete" onsubmit="return confirm('Delete server record from panel?');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors">
+            <i class="fas fa-trash"></i>{{ t('servers.delete') }}
+          </button>
+        </form>
+      </div>
       
       {% if server.status == 'active' %}
       <div class="metric-mini" id="serverMetrics">
@@ -159,62 +291,51 @@
       </button>
     </div>
     {% if clients|length > 0 %}
-    <table class="w-full">
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
       <thead class="bg-gray-50">
         <tr>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.name') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.ip') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.status') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.expiration') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.traffic') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.traffic_limit') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('common.speed') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.last_handshake') }}</th>
-          <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.actions') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.name') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.ip') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.status') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.traffic') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.traffic_limit') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">{{ t('clients.last_handshake') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.expiration') }}</th>
+          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ t('clients.actions') }}</th>
         </tr>
       </thead>
       <tbody>
         {% for client in clients %}
-        <tr class="border-t">
-          <td class="px-6 py-4">{{ client.name }}</td>
-          <td class="px-6 py-4">{{ client.client_ip }}</td>
-          <td class="px-6 py-4">
+        <tr class="border-t hover:bg-gray-50">
+          <td class="px-4 py-3">
+            <a href="/clients/{{ client.id }}" class="font-medium text-gray-900 hover:text-purple-700">{{ client.name }}</a>
+            {% if client.description %}
+              <div class="text-xs text-gray-400 font-light mt-0.5 max-w-xs truncate" title="{{ client.description }}">{{ client.description }}</div>
+            {% endif %}
+            <div class="mt-1">
+              <span class="px-1.5 py-0.5 {{ client.peer_protocol_badge_class }} rounded text-xs font-mono">{{ client.peer_protocol_label }}</span>
+            </div>
+          </td>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">
+            {% if client.client_ip matches '/^[0-9a-f]{8}-/' %}
+              <span class="font-mono text-xs" title="{{ client.client_ip }}">{{ client.client_ip[:8] }}…</span>
+            {% else %}
+              {{ client.client_ip }}
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
             {% if client.status == 'active' %}
               <span class="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">{{ t('status.active') }}</span>
             {% else %}
               <span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs">{{ t('status.disabled') }}</span>
             {% endif %}
           </td>
-          <td class="px-6 py-4 text-sm">
-            {% if client.expires_at %}
-              {% set expires_ts = client.expires_at|date('U') %}
-              {% set now_ts = "now"|date('U') %}
-              {% set diff_days = ((expires_ts - now_ts) / 86400)|round %}
-              
-              {% if diff_days < 0 %}
-                <span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs">
-                  <i class="fas fa-exclamation-circle"></i> {{ t('clients.expired') }}
-                </span>
-              {% elseif diff_days <= 7 %}
-                <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs">
-                  <i class="fas fa-clock"></i> {{ diff_days }} {{ t('common.days') }}
-                </span>
-              {% else %}
-                <span class="text-gray-600">{{ client.expires_at|date('Y-m-d') }}</span>
-              {% endif %}
-            {% else %}
-              <span class="text-gray-400">{{ t('clients.never_expires') }}</span>
-            {% endif %}
+          <td class="px-4 py-3 whitespace-nowrap">
+            <div class="text-gray-600">↑ {{ (client.bytes_sent|default(0) / 1073741824)|number_format(2) }} GB</div>
+            <div class="text-gray-600">↓ {{ (client.bytes_received|default(0) / 1073741824)|number_format(2) }} GB</div>
           </td>
-          <td class="px-6 py-4 text-sm">
-            <div class="text-gray-600">
-              ↑ {{ (client.bytes_sent|default(0) / 1024 / 1024)|number_format(2) }} MB
-            </div>
-            <div class="text-gray-600">
-              ↓ {{ (client.bytes_received|default(0) / 1024 / 1024)|number_format(2) }} MB
-            </div>
-          </td>
-          <td class="px-6 py-4 text-sm">
+          <td class="px-4 py-3">
             {% if client.traffic_limit %}
               {% set total_traffic = (client.bytes_sent|default(0) + client.bytes_received|default(0)) %}
               {% set limit_gb = (client.traffic_limit / 1073741824)|number_format(2) %}
@@ -226,27 +347,45 @@
                   <i class="fas fa-exclamation-circle"></i> {{ t('clients.overlimit') }}
                 </span>
               {% elseif percentage >= 80 %}
-                <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs">
+                <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs whitespace-nowrap">
                   {{ used_gb }} / {{ limit_gb }} GB ({{ percentage }}%)
                 </span>
               {% else %}
-                <span class="text-gray-600">{{ used_gb }} / {{ limit_gb }} GB</span>
+                <span class="text-gray-600 whitespace-nowrap">{{ used_gb }} / {{ limit_gb }} GB</span>
               {% endif %}
             {% else %}
               <span class="text-gray-400">{{ t('clients.unlimited') }}</span>
             {% endif %}
           </td>
-          <td class="px-6 py-4 text-sm">
-            <div id="client-speed-{{ client.id }}" class="text-gray-400">-</div>
-          </td>
-          <td class="px-6 py-4 text-sm">
-            {% if client.last_handshake %}
-              <span class="text-gray-600">{{ client.last_handshake }}</span>
+          <td class="px-4 py-3 text-gray-600 whitespace-nowrap">
+            {% if client.last_handshake_local %}
+              {{ client.last_handshake_local }}
             {% else %}
               <span class="text-gray-400">{{ t('clients.never') }}</span>
             {% endif %}
           </td>
-          <td class="px-6 py-4">
+          <td class="px-4 py-3">
+            {% if client.expires_at %}
+              {% set expires_ts = client.expires_at|date('U') %}
+              {% set now_ts = "now"|date('U') %}
+              {% set diff_days = ((expires_ts - now_ts) / 86400)|round %}
+              
+              {% if diff_days < 0 %}
+                <span class="px-2 py-1 bg-red-100 text-red-800 rounded text-xs whitespace-nowrap">
+                  <i class="fas fa-exclamation-circle"></i> {{ t('clients.expired') }}
+                </span>
+              {% elseif diff_days <= 7 %}
+                <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs whitespace-nowrap">
+                  <i class="fas fa-clock"></i> {{ diff_days }} {{ t('common.days') }}
+                </span>
+              {% else %}
+                <span class="text-gray-600 whitespace-nowrap">{{ client.expires_at|date('Y-m-d') }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-gray-400">{{ t('clients.never_expires') }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
             <a href="/clients/{{ client.id }}" class="text-purple-600 hover:text-purple-800 mr-2">{{ t('servers.view') }}</a>
             {% if client.status == 'active' %}
               <form method="POST" action="/clients/{{ client.id }}/revoke" style="display:inline;">
@@ -265,6 +404,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <div class="p-12 text-center text-gray-500">{{ t('clients.no_clients') }}</div>
     {% endif %}
@@ -661,49 +801,6 @@ if (document.getElementById('cpuSparkline')) {
   setInterval(updateServerMetrics, 30000); // Update every 30 seconds
 }
 
-// Update client speeds
-async function updateClientSpeeds() {
-  const clientRows = document.querySelectorAll('[id^="client-speed-"]');
-  
-  console.log('Found client speed rows:', clientRows.length);
-  
-  for (const row of clientRows) {
-    const clientId = row.id.replace('client-speed-', '');
-    
-    console.log(`Fetching metrics for client ${clientId}`);
-    
-    try {
-      const response = await fetch(`/api/clients/${clientId}/metrics?hours=1`, {
-        credentials: 'same-origin'
-      });
-      
-      const data = await response.json();
-      
-      console.log(`Client ${clientId} metrics:`, data);
-      
-      if (data.success && data.metrics && data.metrics.length > 0) {
-        const latest = data.metrics[data.metrics.length - 1];
-        const speedUp = parseFloat(latest.speed_up_kbps).toFixed(1);
-        const speedDown = parseFloat(latest.speed_down_kbps).toFixed(1);
-        
-        // Format as compact badge
-        row.innerHTML = `<span class="text-xs text-gray-700">↑${speedUp} ↓${speedDown} KB/s</span>`;
-      } else {
-        console.log(`No metrics for client ${clientId}`);
-        row.innerHTML = '<span class="text-xs text-gray-400">-</span>';
-      }
-    } catch (error) {
-      console.error(`Failed to fetch metrics for client ${clientId}:`, error);
-      row.innerHTML = '<span class="text-xs text-gray-400">-</span>';
-    }
-  }
-}
-
-// Update client speeds on load and every 30 seconds
-if (document.querySelector('[id^="client-speed-"]')) {
-  updateClientSpeeds();
-  setInterval(updateClientSpeeds, 30000);
-}
 {% endif %}
 </script>
 {% endblock %}

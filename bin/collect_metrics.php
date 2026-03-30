@@ -15,6 +15,9 @@ require_once __DIR__ . '/../inc/VpnServer.php';
 require_once __DIR__ . '/../inc/VpnClient.php';
 require_once __DIR__ . '/../inc/ServerMonitoring.php';
 
+// Load environment to ensure DB_HOST/DB_* are available for DB::conn()
+Config::load(__DIR__ . '/../.env');
+
 // Set timezone
 date_default_timezone_set('UTC');
 

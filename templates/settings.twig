@@ -51,6 +51,10 @@
                class="tab-link border-transparent text-gray-500 hover:text-gray-700 py-4 px-1 border-b-2 font-medium text-sm">
                 <i class="fas fa-network-wired mr-2"></i>LDAP
             </a>
+            <a href="#" onclick="showTab('system'); return false;" id="tab-system"
+               class="tab-link border-transparent text-gray-500 hover:text-gray-700 py-4 px-1 border-b-2 font-medium text-sm">
+                <i class="fas fa-globe mr-2"></i>Система
+            </a>
             {% endif %}
         </nav>
     </div>
@@ -270,7 +274,7 @@
                             <span class="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">{{ t('users.role_user') }}</span>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-500">{{ u.created_at|date('Y-m-d') }}</td>
+                        <td class="px-6 py-4 text-sm text-gray-500">{{ u.created_at_local ?: '-' }}</td>
                         <td class="px-6 py-4 text-sm">
                             {% if u.id != user.id %}
                             <form method="POST" action="/settings/delete-user/{{ u.id }}" class="inline" onsubmit="return confirm('{{ t('users.delete_confirm', [u.name]) }}')">
@@ -288,6 +292,48 @@
     </div>
     {% endif %}
 </div>
+
+{% if user.role == 'admin' %}
+<!-- System Tab -->
+<div id="content-system" class="tab-content hidden max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-6 py-5 border-b border-gray-200">
+            <h2 class="text-lg font-medium text-gray-900">
+                <i class="fas fa-globe mr-2 text-purple-600"></i>Региональные настройки
+            </h2>
+        </div>
+        <div class="px-6 py-5">
+            <form method="POST" action="/settings/system">
+                <div class="space-y-4 max-w-md">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Часовой пояс</label>
+                        <select name="timezone" class="block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500">
+                            {% set tz_groups = {
+                                'UTC': ['UTC'],
+                                'Европа': ['Europe/Moscow', 'Europe/Kaliningrad', 'Europe/Samara', 'Europe/Kyiv', 'Europe/Minsk', 'Europe/Riga', 'Europe/Vilnius', 'Europe/Tallinn', 'Europe/Helsinki', 'Europe/Warsaw', 'Europe/Berlin', 'Europe/Paris', 'Europe/London', 'Europe/Istanbul', 'Europe/Rome', 'Europe/Madrid', 'Europe/Amsterdam', 'Europe/Bucharest', 'Europe/Athens'],
+                                'Азия': ['Asia/Yekaterinburg', 'Asia/Omsk', 'Asia/Krasnoyarsk', 'Asia/Irkutsk', 'Asia/Yakutsk', 'Asia/Vladivostok', 'Asia/Magadan', 'Asia/Kamchatka', 'Asia/Almaty', 'Asia/Tashkent', 'Asia/Tbilisi', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore'],
+                                'Америка': ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Anchorage', 'America/Sao_Paulo', 'America/Argentina/Buenos_Aires'],
+                                'Другие': ['Pacific/Auckland', 'Australia/Sydney', 'Africa/Cairo', 'Africa/Nairobi']
+                            } %}
+                            {% for group, zones in tz_groups %}
+                                <optgroup label="{{ group }}">
+                                    {% for tz in zones %}
+                                        <option value="{{ tz }}" {% if app_timezone == tz %}selected{% endif %}>{{ tz }}</option>
+                                    {% endfor %}
+                                </optgroup>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-gray-500">Текущий: <strong>{{ app_timezone }}</strong>. Влияет на отображение времени last handshake и дат в панели.</p>
+                    </div>
+                    <button type="submit" class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700">
+                        <i class="fas fa-save mr-2"></i>Сохранить
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <script>
 function showTab(tab) {
