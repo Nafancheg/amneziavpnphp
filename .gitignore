@@ -32,6 +32,10 @@ test_qr.svg
 *.swo
 *~
 
+# Copilot agent instructions
+.github/copilot-instructions.md
+.github/agents/
+
 # Build artifacts
 dist/
 build/
